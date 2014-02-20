@@ -41,6 +41,7 @@ cmd_opts = case cmd
       opt :uri, 'URIs to download and unpack into the working directory.', :short => '-u', :type => :strings
       opt :env, 'Environment variables to add to the process, as NAME=VALUE.', :short => '-e', :type => :strings
       opt :constraint, 'Placement constraint for tasks, e.g. hostname:UNIQUE or rackid:CLUSTER', :type => :strings
+      opt :ports, 'Port(s) to reserve for this app', :short => '-p', :type => :integers
     end
   when 'scale'
     Trollop.options do
@@ -74,6 +75,7 @@ def handle_listing(res)
       puts "Instances:  #{app['instances']}"
       puts "CPUs:       #{app['cpus']}"
       puts "Memory:     #{app['mem']} MB"
+      puts "Ports:      #{app['ports'] * ', '}"
       app['uris'].each do |uri|
         puts "URI:        #{uri}"
       end
@@ -94,6 +96,12 @@ def handle_listing(res)
   end
 end
 
+def scale(marathon, cmd_opts)
+  puts "Scaling app '#{cmd_opts[:id]}' to #{cmd_opts[:num_instances]} instances"
+  res = marathon.scale(cmd_opts[:id], cmd_opts[:num_instances])
+  puts res
+end
+
 # Run
 case cmd
 when 'start'
@@ -107,13 +115,37 @@ when 'start'
     :constraints => (cmd_opts[:constraint] || []).map { |c| c.split(':') }
   }
   app_opts[:executor] = cmd_opts[:executor] unless cmd_opts[:executor] == nil
+  app_opts[:ports] = cmd_opts[:ports] unless cmd_opts[:ports] == nil
+
+  res = marathon.list
+  if res.success?
+    res.parsed_response.each do |app|
+      if app['id'] == cmd_opts[:id]
+        if app['cpus'] != app_opts[:cpus] or app['mem'] != app_opts[:mem]
+          puts "Resource allocation changed, stopping #{cmd_opts[:id]}"
+          res = marathon.stop(cmd_opts[:id])
+          puts res 
+          puts "Starting app '#{cmd_opts[:id]}'"
+          res = marathon.start(cmd_opts[:id], app_opts)
+          puts res
+          exit
+        end
+        if app['instances'] != app_opts[:instances]
+          puts "Need to scale #{app['id']} to #{app_opts[:instances]}"
+          scale(marathon, cmd_opts)
+          exit
+        end
+        puts "#{cmd_opts[:id]} already running with #{app['instances']} instances"
+        exit
+      end
+    end
+  end
+
   puts "Starting app '#{cmd_opts[:id]}'"
   res = marathon.start(cmd_opts[:id], app_opts)
   puts res
 when 'scale'
-  puts "Scaling app '#{cmd_opts[:id]}' to #{cmd_opts[:num_instances]} instances"
-  res = marathon.scale(cmd_opts[:id], cmd_opts[:num_instances])
-  puts res
+  scale(marathon, cmd_opts)
 when 'stop'
   puts "Stopping app '#{cmd_opts[:id]}'"
   res = marathon.stop(cmd_opts[:id])
